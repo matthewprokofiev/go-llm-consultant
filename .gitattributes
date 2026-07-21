@@ -1,0 +1,7 @@
+# Git for Windows по умолчанию подставляет CRLF при клоне. Для файлов, которые
+# уезжают внутрь Linux-контейнера (Dockerfile, миграции, скрипты), это ломает сборку.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary

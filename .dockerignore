@@ -1,0 +1,26 @@
+# Секреты не должны попадать даже в build-контекст и промежуточные слои образа.
+.env
+*.env
+!.env.example
+
+# Артефакты и мусор, не нужные для сборки.
+bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+.git
+.github
+.gitignore
+.gitattributes
+
+.DS_Store
+.idea/
+.vscode/
+
+# Тесты и документация в образ не едут.
+*_test.go
+docs/
+README.md
+README.en.md

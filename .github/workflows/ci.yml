@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      # Версия совпадает с GOLANGCI_LINT_VERSION в Makefile: локальный make lint
+      # и CI должны линтить одинаково.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: go test
+        run: go test -race ./...
+
+      # Сертификат Минцифры в git не хранится — качаем его перед сборкой образа,
+      # иначе COPY certs/ в Dockerfile упадёт.
+      - name: fetch trusted root cert
+        run: make cert
+
+      - name: docker build
+        run: docker build -t go-llm-consultant:ci .
