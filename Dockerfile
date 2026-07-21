@@ -1,3 +1,6 @@
+# Пин патч-версии обязателен: goose/v3 требует go >= 1.25.7 (см. go.mod),
+# а плавающий тег golang:1.25-alpine на Docker Hub может отставать на патч и
+# ронять сборку с «requires go >= 1.25.7». Держим тег в паре с полом go.mod.
 FROM golang:1.25.7-alpine AS builder
 
 WORKDIR /src
