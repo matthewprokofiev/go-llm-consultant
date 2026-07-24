@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matveiprokofev/go-llm-consultant/internal/llm"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/llm"
 )
 
 // askTimeout — дедлайн одного запроса к LLM. Генерация штатно идёт 10–20с, берём

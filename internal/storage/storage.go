@@ -11,7 +11,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // регистрирует драйвер "pgx" для database/sql, нужен goose
 	"github.com/pressly/goose/v3"
 
-	"github.com/matveiprokofev/go-llm-consultant/migrations"
+	"github.com/matthewprokofiev/go-llm-consultant/migrations"
 )
 
 type Storage struct {

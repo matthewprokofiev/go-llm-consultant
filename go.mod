@@ -1,4 +1,4 @@
-module github.com/matveiprokofev/go-llm-consultant
+module github.com/matthewprokofiev/go-llm-consultant
 
 go 1.25.7
 

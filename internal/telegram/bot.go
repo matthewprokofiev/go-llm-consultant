@@ -10,7 +10,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
-	"github.com/matveiprokofev/go-llm-consultant/internal/storage"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/storage"
 )
 
 // Store — журнал диалогов. За интерфейсом ради подмены в тестах и слабой связности.

@@ -7,11 +7,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/matveiprokofev/go-llm-consultant/internal/config"
-	"github.com/matveiprokofev/go-llm-consultant/internal/knowledge"
-	"github.com/matveiprokofev/go-llm-consultant/internal/llm"
-	"github.com/matveiprokofev/go-llm-consultant/internal/storage"
-	"github.com/matveiprokofev/go-llm-consultant/internal/telegram"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/config"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/knowledge"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/llm"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/storage"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/telegram"
 )
 
 func main() {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matveiprokofev/go-llm-consultant/internal/llm"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/llm"
 )
 
 type fakeKnowledge struct {

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/matveiprokofev/go-llm-consultant/internal/config"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/config"
 )
 
 // Answer — ответ модели вместе с фактическим расходом токенов из поля usage.

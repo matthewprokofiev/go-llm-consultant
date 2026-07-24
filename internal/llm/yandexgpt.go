@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matveiprokofev/go-llm-consultant/internal/config"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/config"
 )
 
 const yandexCompletionURL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"

@@ -19,7 +19,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/matveiprokofev/go-llm-consultant/internal/config"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/config"
 )
 
 const (
