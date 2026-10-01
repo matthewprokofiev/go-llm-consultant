@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/matthewprokofiev/go-llm-consultant/internal/config"
+	"github.com/matthewprokofiev/go-llm-consultant/internal/consultant"
 	"github.com/matthewprokofiev/go-llm-consultant/internal/knowledge"
 	"github.com/matthewprokofiev/go-llm-consultant/internal/llm"
 	"github.com/matthewprokofiev/go-llm-consultant/internal/storage"
@@ -34,29 +35,32 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := storage.Migrate(ctx, cfg.DatabaseURL); err != nil {
-		return fmt.Errorf("миграции: %w", err)
+	// Без DATABASE_URL бот ничего не пишет; с ним — только обезличенную статистику.
+	var stats *storage.Storage
+	if cfg.DatabaseURL != "" {
+		if err := storage.Migrate(ctx, cfg.DatabaseURL); err != nil {
+			return fmt.Errorf("миграции: %w", err)
+		}
+		stats, err = storage.New(ctx, cfg.DatabaseURL, log)
+		if err != nil {
+			return err
+		}
+		defer stats.Close()
 	}
-
-	store, err := storage.New(ctx, cfg.DatabaseURL, log)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
 
 	kb, err := knowledge.New(cfg.KnowledgePath, log)
 	if err != nil {
 		return err
 	}
 
-	llmClient, err := llm.New(cfg, log)
+	llmClient, err := llm.New(cfg.LLM, log)
 	if err != nil {
 		return err
 	}
 
-	consultant := telegram.NewConsultant(llmClient, kb, cfg.Provider, log)
+	c := consultant.New(llmClient, kb, cfg.BusinessName, cfg.LLM.Provider, log)
 
-	b, err := telegram.New(cfg.BotToken, consultant, store, kb, cfg.Provider, cfg.AdminTgID, log)
+	b, err := telegram.New(cfg, c, kb, stats, log)
 	if err != nil {
 		return err
 	}

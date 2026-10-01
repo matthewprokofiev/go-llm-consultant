@@ -33,6 +33,10 @@ func newTestGigaChat(oauthURL, chatURL string) *GigaChat {
 	}
 }
 
+func msgs(system, user string) []Message {
+	return []Message{{Role: RoleSystem, Content: system}, {Role: RoleUser, Content: user}}
+}
+
 func oauthServer(t *testing.T, counter *int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,20 +59,20 @@ func TestGigaChatAsk(t *testing.T) {
 			t.Errorf("chat без Bearer-токена: %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"  Привет из FAQ  "}}],"usage":{"total_tokens":42}}`)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"  Привет из FAQ  "}}],"usage":{"prompt_tokens":40,"completion_tokens":2,"total_tokens":42}}`)
 	}))
 	defer chat.Close()
 
 	g := newTestGigaChat(oauth.URL, chat.URL)
-	got, err := g.Ask(context.Background(), "system", "вопрос")
+	got, err := g.Ask(context.Background(), msgs("system", "вопрос"))
 	if err != nil {
 		t.Fatalf("Ask вернул ошибку: %v", err)
 	}
 	if got.Text != "Привет из FAQ" {
 		t.Errorf("ответ = %q, ожидался обрезанный %q", got.Text, "Привет из FAQ")
 	}
-	if got.TokensUsed != 42 {
-		t.Errorf("TokensUsed = %d, ожидалось 42 из usage.total_tokens", got.TokensUsed)
+	if got.InputTokens != 40 || got.OutputTokens != 2 {
+		t.Errorf("токены = %d/%d, ожидалось 40/2 из usage", got.InputTokens, got.OutputTokens)
 	}
 }
 
@@ -91,7 +95,7 @@ func TestGigaChatTokenCache(t *testing.T) {
 	g.now = func() time.Time { return current }
 
 	// Первый вызов: токена нет → один поход в OAuth.
-	if _, err := g.Ask(context.Background(), "s", "u"); err != nil {
+	if _, err := g.Ask(context.Background(), msgs("s", "u")); err != nil {
 		t.Fatalf("первый Ask: %v", err)
 	}
 	if got := atomic.LoadInt32(&oauthHits); got != 1 {
@@ -100,7 +104,7 @@ func TestGigaChatTokenCache(t *testing.T) {
 
 	// Второй вызов в пределах срока жизни токена → OAuth не дёргается.
 	current = base.Add(5 * time.Minute)
-	if _, err := g.Ask(context.Background(), "s", "u"); err != nil {
+	if _, err := g.Ask(context.Background(), msgs("s", "u")); err != nil {
 		t.Fatalf("второй Ask: %v", err)
 	}
 	if got := atomic.LoadInt32(&oauthHits); got != 1 {
@@ -109,7 +113,7 @@ func TestGigaChatTokenCache(t *testing.T) {
 
 	// Перешагиваем срок жизни (30 мин) → токен переполучается.
 	current = base.Add(gigaTokenTTL + time.Second)
-	if _, err := g.Ask(context.Background(), "s", "u"); err != nil {
+	if _, err := g.Ask(context.Background(), msgs("s", "u")); err != nil {
 		t.Fatalf("третий Ask: %v", err)
 	}
 	if got := atomic.LoadInt32(&oauthHits); got != 2 {
@@ -144,7 +148,7 @@ func TestGigaChatConcurrentTokenFetch(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			if _, err := g.Ask(context.Background(), "s", "u"); err != nil {
+			if _, err := g.Ask(context.Background(), msgs("s", "u")); err != nil {
 				t.Errorf("параллельный Ask вернул ошибку: %v", err)
 			}
 		}()
@@ -176,7 +180,7 @@ func TestGigaChat401Retry(t *testing.T) {
 	defer chat.Close()
 
 	g := newTestGigaChat(oauth.URL, chat.URL)
-	got, err := g.Ask(context.Background(), "s", "u")
+	got, err := g.Ask(context.Background(), msgs("s", "u"))
 	if err != nil {
 		t.Fatalf("Ask после 401-повтора вернул ошибку: %v", err)
 	}
@@ -206,7 +210,7 @@ func TestGigaChat401NoInfiniteRetry(t *testing.T) {
 	defer chat.Close()
 
 	g := newTestGigaChat(oauth.URL, chat.URL)
-	_, err := g.Ask(context.Background(), "s", "u")
+	_, err := g.Ask(context.Background(), msgs("s", "u"))
 	if err == nil {
 		t.Fatal("ожидалась ошибка при постоянном 401")
 	}
@@ -237,7 +241,7 @@ func TestGigaChatTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := g.Ask(ctx, "s", "u")
+	_, err := g.Ask(ctx, msgs("s", "u"))
 	if err == nil {
 		t.Fatal("ожидалась ошибка по таймауту")
 	}

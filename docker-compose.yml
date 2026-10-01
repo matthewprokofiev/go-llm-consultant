@@ -1,32 +1,14 @@
+# Один бот — один контейнер. Настройки и база знаний свои у каждого клиента:
+#   ENV_FILE=clients/kadr/.env KNOWLEDGE_DIR=clients/kadr/knowledge docker compose -p kadr up -d --build
+# Статистика в Postgres включается вторым файлом, см. docker-compose.stats.yml.
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-consultant}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-consultant}
-      POSTGRES_DB: ${POSTGRES_DB:-consultant}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-consultant} -d ${POSTGRES_DB:-consultant}"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-
   app:
     build: .
     env_file:
-      - .env
-    environment:
-      # В compose приложение ходит к postgres по имени сервиса, а не на localhost.
-      DATABASE_URL: postgres://${POSTGRES_USER:-consultant}:${POSTGRES_PASSWORD:-consultant}@postgres:5432/${POSTGRES_DB:-consultant}?sslmode=disable
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - ${ENV_FILE:-.env}
+    volumes:
+      # База знаний монтируется, а не вшивается в образ: /reload подхватывает правки
+      # без пересборки. Запись нужна для ответов, которые владелец одобрил для базы;
+      # больше бот на диск хоста ничего не пишет.
+      - ${KNOWLEDGE_DIR:-./knowledge}:/app/knowledge
     restart: on-failure
-
-volumes:
-  pgdata:

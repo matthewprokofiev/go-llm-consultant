@@ -1,0 +1,32 @@
+# Обезличенная статистика для /stats: сколько вопросов, без ответа, не по теме,
+# заявок и токенов. Ни текстов, ни имён, ни id пользователей в базе нет.
+#   docker compose -f docker-compose.yml -f docker-compose.stats.yml up -d --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-consultant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-consultant}
+      POSTGRES_DB: ${POSTGRES_DB:-consultant}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Только localhost: базу видит сам сервер (и интеграционный тест), но не интернет.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-consultant} -d ${POSTGRES_DB:-consultant}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  app:
+    environment:
+      # В compose приложение ходит к postgres по имени сервиса, а не на localhost.
+      DATABASE_URL: postgres://${POSTGRES_USER:-consultant}:${POSTGRES_PASSWORD:-consultant}@postgres:5432/${POSTGRES_DB:-consultant}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

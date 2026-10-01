@@ -17,7 +17,9 @@ func setEnv(t *testing.T, kv map[string]string) {
 func baseValid() map[string]string {
 	return map[string]string{
 		"BOT_TOKEN":         "token",
-		"DATABASE_URL":      "postgres://u:p@localhost:5432/db",
+		"OWNER_CHAT_ID":     "-1001234567890",
+		"BUSINESS_NAME":     "Фотостудия «Кадр»",
+		"BUSINESS_CONTACTS": `+7 900 000-00-00\nул. Примерная, 1`,
 		"LLM_PROVIDER":      "gigachat",
 		"GIGACHAT_AUTH_KEY": "authkey",
 	}
@@ -35,14 +37,14 @@ func TestLoad(t *testing.T) {
 			name: "gigachat минимально валидный, дефолты подставлены",
 			env:  baseValid(),
 			check: func(t *testing.T, c Config) {
-				if c.Provider != ProviderGigaChat {
-					t.Errorf("Provider = %q, ожидался gigachat", c.Provider)
+				if c.LLM.Provider != ProviderGigaChat {
+					t.Errorf("Provider = %q, ожидался gigachat", c.LLM.Provider)
 				}
-				if c.GigaChat.Scope != defaultGigaChatScope {
-					t.Errorf("Scope = %q, ожидался дефолт %q", c.GigaChat.Scope, defaultGigaChatScope)
+				if c.LLM.GigaChat.Scope != defaultGigaChatScope {
+					t.Errorf("Scope = %q, ожидался дефолт %q", c.LLM.GigaChat.Scope, defaultGigaChatScope)
 				}
-				if c.GigaChat.Model != defaultGigaChatModel {
-					t.Errorf("Model = %q, ожидался дефолт", c.GigaChat.Model)
+				if c.LLM.GigaChat.Model != defaultGigaChatModel {
+					t.Errorf("Model = %q, ожидался дефолт", c.LLM.GigaChat.Model)
 				}
 				if c.KnowledgePath != defaultKnowledgePath {
 					t.Errorf("KnowledgePath = %q, ожидался дефолт", c.KnowledgePath)
@@ -54,16 +56,14 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			name: "yandex минимально валидный",
-			env: map[string]string{
-				"BOT_TOKEN":        "token",
-				"DATABASE_URL":     "postgres://x",
+			env: merge(without(baseValid(), "GIGACHAT_AUTH_KEY"), map[string]string{
 				"LLM_PROVIDER":     "yandexgpt",
 				"YANDEX_API_KEY":   "apikey",
 				"YANDEX_FOLDER_ID": "folder",
-			},
+			}),
 			check: func(t *testing.T, c Config) {
-				if c.Yandex.Model != defaultYandexModel {
-					t.Errorf("Model = %q, ожидался дефолт", c.Yandex.Model)
+				if c.LLM.Yandex.Model != defaultYandexModel {
+					t.Errorf("Model = %q, ожидался дефолт", c.LLM.Yandex.Model)
 				}
 			},
 		},
@@ -74,16 +74,96 @@ func TestLoad(t *testing.T) {
 			errSubstrs: []string{"BOT_TOKEN"},
 		},
 		{
-			name:       "нет DATABASE_URL",
-			env:        without(baseValid(), "DATABASE_URL"),
+			name:       "нет чата владельца, названия и контактов",
+			env:        without(without(without(baseValid(), "OWNER_CHAT_ID"), "BUSINESS_NAME"), "BUSINESS_CONTACTS"),
 			wantErr:    true,
-			errSubstrs: []string{"DATABASE_URL"},
+			errSubstrs: []string{"OWNER_CHAT_ID", "BUSINESS_NAME", "BUSINESS_CONTACTS"},
+		},
+		{
+			name:       "битый OWNER_CHAT_ID",
+			env:        merge(baseValid(), map[string]string{"OWNER_CHAT_ID": "@group"}),
+			wantErr:    true,
+			errSubstrs: []string{"OWNER_CHAT_ID"},
+		},
+		{
+			name: "без LLM_PROVIDER и DATABASE_URL: gigachat, статистика выключена",
+			env:  without(baseValid(), "LLM_PROVIDER"),
+			check: func(t *testing.T, c Config) {
+				if c.LLM.Provider != ProviderGigaChat {
+					t.Errorf("Provider = %q, ожидался дефолт gigachat", c.LLM.Provider)
+				}
+				if c.DatabaseURL != "" {
+					t.Errorf("DatabaseURL = %q, ожидался пустой", c.DatabaseURL)
+				}
+			},
 		},
 		{
 			name:       "неизвестный провайдер",
-			env:        merge(baseValid(), map[string]string{"LLM_PROVIDER": "openai"}),
+			env:        merge(baseValid(), map[string]string{"LLM_PROVIDER": "claude"}),
 			wantErr:    true,
-			errSubstrs: []string{"LLM_PROVIDER", "openai"},
+			errSubstrs: []string{"LLM_PROVIDER", "claude"},
+		},
+		{
+			name: "openai-совместимый: адрес, ключ и модель из настроек",
+			env: merge(without(baseValid(), "GIGACHAT_AUTH_KEY"), map[string]string{
+				"LLM_PROVIDER":    "openai",
+				"OPENAI_BASE_URL": "https://api.deepseek.com/v1/",
+				"OPENAI_API_KEY":  "key",
+				"OPENAI_MODEL":    "deepseek-chat",
+			}),
+			check: func(t *testing.T, c Config) {
+				if c.LLM.OpenAI.BaseURL != "https://api.deepseek.com/v1" {
+					t.Errorf("BaseURL = %q, ожидался без хвостового слэша", c.LLM.OpenAI.BaseURL)
+				}
+				if c.LLM.Model() != "deepseek-chat" {
+					t.Errorf("Model() = %q", c.LLM.Model())
+				}
+			},
+		},
+		{
+			name: "openai без адреса, ключа и модели",
+			env: merge(without(baseValid(), "GIGACHAT_AUTH_KEY"), map[string]string{
+				"LLM_PROVIDER":    "openai",
+				"OPENAI_BASE_URL": "api.deepseek.com",
+			}),
+			wantErr:    true,
+			errSubstrs: []string{"OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL"},
+		},
+		{
+			name: "тексты: \\n становится переносом, дефолты подставлены",
+			env:  baseValid(),
+			check: func(t *testing.T, c Config) {
+				if c.BusinessContacts != "+7 900 000-00-00\nул. Примерная, 1" {
+					t.Errorf("BusinessContacts = %q, ожидался настоящий перенос строки", c.BusinessContacts)
+				}
+				if !strings.Contains(c.Texts.Greeting, "Фотостудия «Кадр»") {
+					t.Errorf("приветствие по умолчанию без названия бизнеса: %q", c.Texts.Greeting)
+				}
+				if c.Texts.ButtonLead == "" || c.Texts.LeadSent == "" || c.Texts.Consent != "" {
+					t.Errorf("неожиданные дефолты текстов: %+v", c.Texts)
+				}
+				if !c.LeadOfferEnabled || c.LeadsPerHour != defaultLeadsPerHour || c.QuestionsPerHour != defaultQuestionsPerHour {
+					t.Errorf("неожиданные дефолты: offer=%v leads=%d questions=%d", c.LeadOfferEnabled, c.LeadsPerHour, c.QuestionsPerHour)
+				}
+				if c.Location == nil || c.Location.String() != defaultTimezone {
+					t.Errorf("Location = %v, ожидался %s", c.Location, defaultTimezone)
+				}
+			},
+		},
+		{
+			name: "тарифы с десятичной запятой",
+			env:  merge(baseValid(), map[string]string{"LLM_PRICE_INPUT_PER_1K": "0,065", "LLM_MIN_MONTHLY": "600"}),
+			check: func(t *testing.T, c Config) {
+				if c.LLM.Prices.InputPer1K != 0.065 || c.LLM.Prices.MinMonthly != 600 {
+					t.Errorf("Prices = %+v", c.LLM.Prices)
+				}
+			},
+		},
+		{
+			name:       "битые лимит, часовой пояс и цена",
+			env:        merge(baseValid(), map[string]string{"LIMIT_LEADS_PER_HOUR": "-1", "TIMEZONE": "Mars/Base", "LLM_PRICE_OUTPUT_PER_1K": "дёшево"}),
+			wantErr:    true,
+			errSubstrs: []string{"LIMIT_LEADS_PER_HOUR", "TIMEZONE", "LLM_PRICE_OUTPUT_PER_1K"},
 		},
 		{
 			name:       "gigachat без ключа",
@@ -93,12 +173,10 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			name: "yandex без folder id",
-			env: map[string]string{
-				"BOT_TOKEN":      "token",
-				"DATABASE_URL":   "postgres://x",
+			env: merge(without(baseValid(), "GIGACHAT_AUTH_KEY"), map[string]string{
 				"LLM_PROVIDER":   "yandexgpt",
 				"YANDEX_API_KEY": "apikey",
-			},
+			}),
 			wantErr:    true,
 			errSubstrs: []string{"YANDEX_FOLDER_ID"},
 		},
@@ -147,6 +225,14 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadCoreSkipsTelegram(t *testing.T) {
+	clearAll(t)
+	setEnv(t, without(without(without(baseValid(), "BOT_TOKEN"), "OWNER_CHAT_ID"), "BUSINESS_CONTACTS"))
+	if _, err := LoadCore(); err != nil {
+		t.Fatalf("экзамену не нужны токен бота, чат владельца и контакты: %v", err)
+	}
+}
+
 func TestAdminOptional(t *testing.T) {
 	clearAll(t)
 	setEnv(t, baseValid())
@@ -164,10 +250,16 @@ func TestAdminOptional(t *testing.T) {
 func clearAll(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
-		"BOT_TOKEN", "ADMIN_TG_ID", "DATABASE_URL", "LLM_PROVIDER",
+		"BOT_TOKEN", "OWNER_CHAT_ID", "ADMIN_TG_ID", "DATABASE_URL", "LLM_PROVIDER",
 		"GIGACHAT_AUTH_KEY", "GIGACHAT_SCOPE", "GIGACHAT_MODEL", "GIGACHAT_CERT_PATH",
 		"GIGACHAT_INSECURE_SKIP_VERIFY", "YANDEX_API_KEY", "YANDEX_FOLDER_ID",
-		"YANDEX_MODEL", "KNOWLEDGE_PATH", "APP_ENV",
+		"YANDEX_MODEL", "OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL",
+		"LLM_PRICE_INPUT_PER_1K", "LLM_PRICE_OUTPUT_PER_1K", "LLM_MIN_MONTHLY",
+		"BUSINESS_NAME", "BUSINESS_CONTACTS", "TIMEZONE", "LEAD_OFFER_ENABLED",
+		"LIMIT_LEADS_PER_HOUR", "LIMIT_QUESTIONS_PER_HOUR", "GREETING_TEXT",
+		"BUTTON_LEAD_TEXT", "BUTTON_CONTACTS_TEXT", "LEAD_SENT_TEXT", "QUESTION_SENT_TEXT",
+		"DELIVERY_FAILED_TEXT", "OWNER_REPLY_PREFIX", "CONSENT_TEXT", "PRIVACY_URL",
+		"KNOWLEDGE_PATH", "APP_ENV",
 	} {
 		t.Setenv(k, "")
 	}

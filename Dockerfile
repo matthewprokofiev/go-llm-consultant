@@ -19,9 +19,9 @@ RUN apk add --no-cache ca-certificates tzdata && \
 WORKDIR /app
 
 COPY --from=builder /out/bot /usr/local/bin/bot
-# База знаний и корневой сертификат Минцифры читаются на старте с диска, поэтому
-# едут в образ. certs/ должен быть заполнен `make cert` до сборки образа.
-COPY knowledge/ /app/knowledge/
+# Корневой сертификат Минцифры читается на старте с диска, поэтому едет в образ:
+# certs/ должен быть заполнен `make cert` до сборки. База знаний в образ не
+# вшивается — её монтирует compose, и один образ служит всем клиентам.
 COPY certs/ /app/certs/
 
 USER appuser

@@ -1,4 +1,4 @@
-.PHONY: build run test lint vet tidy migrate-up migrate-down up down docker-build cert
+.PHONY: build run test lint vet tidy migrate-up migrate-down up down up-stats down-stats docker-build cert
 
 GOOSE_DRIVER ?= postgres
 DATABASE_URL ?= postgres://consultant:consultant@localhost:5432/consultant?sslmode=disable
@@ -42,18 +42,29 @@ tidy:
 cert:
 	curl -fsSL $(CERT_URL) -o $(CERT_PATH)
 
-# Миграции применяются и автоматически на старте приложения; эти цели — для ручной работы.
+# Миграции нужны только в режиме статистики (задан DATABASE_URL) и применяются
+# на старте приложения автоматически; эти цели — для ручной работы.
 migrate-up:
 	go run github.com/pressly/goose/v3/cmd/goose@latest -dir migrations $(GOOSE_DRIVER) "$(DATABASE_URL)" up
 
 migrate-down:
 	go run github.com/pressly/goose/v3/cmd/goose@latest -dir migrations $(GOOSE_DRIVER) "$(DATABASE_URL)" down
 
+STATS_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.stats.yml
+
+# Бот без базы данных: ничего не пишет на диск.
 up:
 	docker compose up -d --build
 
 down:
 	docker compose down
+
+# Бот с обезличенной статистикой в Postgres (команда /stats).
+up-stats:
+	$(STATS_COMPOSE) up -d --build
+
+down-stats:
+	$(STATS_COMPOSE) down
 
 docker-build:
 	docker compose build

@@ -1,12 +1,12 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -103,18 +103,16 @@ func gigaTLSConfig(cfg config.GigaChatConfig, log *slog.Logger) (*tls.Config, er
 
 // Ask задаёт вопрос модели. При 401 (протухший токен) один раз переполучает токен
 // и повторяет запрос — это штатная ситуация на границе 30-минутного окна.
-func (g *GigaChat) Ask(ctx context.Context, systemPrompt, userMessage string) (Answer, error) {
+func (g *GigaChat) Ask(ctx context.Context, messages []Message) (Answer, error) {
 	token, err := g.accessToken(ctx, false)
 	if err != nil {
 		return Answer{}, err
 	}
 
-	ans, status, err := g.chat(ctx, token, systemPrompt, userMessage)
-	if err == nil {
-		return ans, nil
-	}
-	if status != http.StatusUnauthorized {
-		return Answer{}, err
+	ans, err := g.chat(ctx, token, messages)
+	var se *StatusError
+	if err == nil || !errors.As(err, &se) || se.Code != http.StatusUnauthorized {
+		return ans, err
 	}
 
 	// Ровно один повтор с принудительно обновлённым токеном.
@@ -123,77 +121,12 @@ func (g *GigaChat) Ask(ctx context.Context, systemPrompt, userMessage string) (A
 	if err != nil {
 		return Answer{}, err
 	}
-	ans, _, err = g.chat(ctx, token, systemPrompt, userMessage)
-	return ans, err
+	return g.chat(ctx, token, messages)
 }
 
-type gigaChatRequest struct {
-	Model    string            `json:"model"`
-	Messages []gigaChatMessage `json:"messages"`
-}
-
-type gigaChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type gigaChatResponse struct {
-	Choices []struct {
-		Message gigaChatMessage `json:"message"`
-	} `json:"choices"`
-	Usage struct {
-		TotalTokens int `json:"total_tokens"`
-	} `json:"usage"`
-}
-
-// chat делает один запрос к /chat/completions. Второй возврат — HTTP-статус, он нужен
-// вызывающему, чтобы отличить 401 (повторяемый) от прочих ошибок.
-func (g *GigaChat) chat(ctx context.Context, token, systemPrompt, userMessage string) (Answer, int, error) {
-	body, err := json.Marshal(gigaChatRequest{
-		Model: g.model,
-		Messages: []gigaChatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userMessage},
-		},
-	})
-	if err != nil {
-		return Answer{}, 0, fmt.Errorf("сборка запроса GigaChat: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.chatURL, bytes.NewReader(body))
-	if err != nil {
-		return Answer{}, 0, fmt.Errorf("создание запроса GigaChat: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := g.httpClient.Do(req)
-	if err != nil {
-		return Answer{}, 0, fmt.Errorf("запрос к GigaChat: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return Answer{}, resp.StatusCode, fmt.Errorf("чтение ответа GigaChat: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return Answer{}, resp.StatusCode, fmt.Errorf("GigaChat вернул статус %d: %s", resp.StatusCode, snippet(data))
-	}
-
-	var parsed gigaChatResponse
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return Answer{}, resp.StatusCode, fmt.Errorf("разбор ответа GigaChat: %w", err)
-	}
-	if len(parsed.Choices) == 0 {
-		return Answer{}, resp.StatusCode, fmt.Errorf("GigaChat вернул пустой список choices")
-	}
-	g.log.Debug("ответ GigaChat получен", "total_tokens", parsed.Usage.TotalTokens)
-	return Answer{
-		Text:       strings.TrimSpace(parsed.Choices[0].Message.Content),
-		TokensUsed: parsed.Usage.TotalTokens,
-	}, resp.StatusCode, nil
+// chat — запрос к /chat/completions: формат у GigaChat как у OpenAI, код общий.
+func (g *GigaChat) chat(ctx context.Context, token string, messages []Message) (Answer, error) {
+	return chatCompletion(ctx, g.httpClient, g.chatURL, "Bearer "+token, g.model, messages, "GigaChat")
 }
 
 // accessToken отдаёт валидный токен из кэша или получает новый. force=true
@@ -279,7 +212,7 @@ func (g *GigaChat) fetchToken(ctx context.Context) (string, time.Time, error) {
 		return "", time.Time{}, fmt.Errorf("чтение ответа OAuth GigaChat: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", time.Time{}, fmt.Errorf("OAuth GigaChat вернул статус %d: %s", resp.StatusCode, snippet(data))
+		return "", time.Time{}, &StatusError{Provider: "OAuth GigaChat", Code: resp.StatusCode, Body: snippet(data)}
 	}
 
 	var parsed gigaOAuthResponse
@@ -306,14 +239,4 @@ func uuidV4() (string, error) {
 	b[6] = (b[6] & 0x0f) | 0x40 // версия 4
 	b[8] = (b[8] & 0x3f) | 0x80 // вариант 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
-}
-
-// snippet обрезает тело ошибки для лога/сообщения: полный дамп чужого ответа не нужен.
-func snippet(data []byte) string {
-	const max = 300
-	s := strings.TrimSpace(string(data))
-	if len(s) > max {
-		return s[:max] + "…"
-	}
-	return s
 }

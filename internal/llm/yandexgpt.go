@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,6 +15,8 @@ import (
 
 const yandexCompletionURL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
+const yandexProviderName = "YandexGPT"
+
 // YandexGPT — клиент к YandexGPT. Проще GigaChat: аутентификация через Api-Key,
 // TLS по публичным CA (кастомный пул не нужен).
 type YandexGPT struct {
@@ -23,18 +24,16 @@ type YandexGPT struct {
 	apiKey     string
 	modelURI   string
 	url        string
-	log        *slog.Logger
 }
 
-func NewYandexGPT(cfg config.YandexConfig, log *slog.Logger) (*YandexGPT, error) {
+func NewYandexGPT(cfg config.YandexConfig) *YandexGPT {
 	return &YandexGPT{
 		// Timeout 0 — дедлайн держит context вызывающего (см. коммент в GigaChat).
 		httpClient: &http.Client{},
 		apiKey:     cfg.APIKey,
 		modelURI:   fmt.Sprintf("gpt://%s/%s/latest", cfg.FolderID, cfg.Model),
 		url:        yandexCompletionURL,
-		log:        log,
-	}, nil
+	}
 }
 
 type yandexRequest struct {
@@ -62,23 +61,25 @@ type yandexResponse struct {
 		} `json:"alternatives"`
 		Usage struct {
 			// Yandex отдаёт счётчики токенов строками ("123"), а не числами.
-			TotalTokens string `json:"totalTokens"`
+			InputTextTokens  string `json:"inputTextTokens"`
+			CompletionTokens string `json:"completionTokens"`
 		} `json:"usage"`
 	} `json:"result"`
 }
 
-func (y *YandexGPT) Ask(ctx context.Context, systemPrompt, userMessage string) (Answer, error) {
+func (y *YandexGPT) Ask(ctx context.Context, messages []Message) (Answer, error) {
+	msgs := make([]yandexReqMessage, len(messages))
+	for i, m := range messages {
+		msgs[i] = yandexReqMessage{Role: m.Role, Text: m.Content}
+	}
 	body, err := json.Marshal(yandexRequest{
 		ModelURI: y.modelURI,
 		CompletionOptions: yandexOptions{
 			Stream:      false,
-			Temperature: 0.3,
+			Temperature: temperature,
 			MaxTokens:   2000,
 		},
-		Messages: []yandexReqMessage{
-			{Role: "system", Text: systemPrompt},
-			{Role: "user", Text: userMessage},
-		},
+		Messages: msgs,
 	})
 	if err != nil {
 		return Answer{}, fmt.Errorf("сборка запроса YandexGPT: %w", err)
@@ -103,7 +104,7 @@ func (y *YandexGPT) Ask(ctx context.Context, systemPrompt, userMessage string) (
 		return Answer{}, fmt.Errorf("чтение ответа YandexGPT: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Answer{}, fmt.Errorf("YandexGPT вернул статус %d: %s", resp.StatusCode, snippet(data))
+		return Answer{}, &StatusError{Provider: yandexProviderName, Code: resp.StatusCode, Body: snippet(data)}
 	}
 
 	var parsed yandexResponse
@@ -113,12 +114,13 @@ func (y *YandexGPT) Ask(ctx context.Context, systemPrompt, userMessage string) (
 	if len(parsed.Result.Alternatives) == 0 {
 		return Answer{}, fmt.Errorf("YandexGPT вернул пустой список alternatives")
 	}
-	y.log.Debug("ответ YandexGPT получен", "total_tokens", parsed.Result.Usage.TotalTokens)
 
-	// usage.totalTokens приходит строкой ("123"); при неразборе токены просто 0.
-	tokens, _ := strconv.Atoi(parsed.Result.Usage.TotalTokens)
+	// Счётчики приходят строками ("123"); при неразборе токены просто 0.
+	in, _ := strconv.Atoi(parsed.Result.Usage.InputTextTokens)
+	out, _ := strconv.Atoi(parsed.Result.Usage.CompletionTokens)
 	return Answer{
-		Text:       strings.TrimSpace(parsed.Result.Alternatives[0].Message.Text),
-		TokensUsed: tokens,
+		Text:         strings.TrimSpace(parsed.Result.Alternatives[0].Message.Text),
+		InputTokens:  in,
+		OutputTokens: out,
 	}, nil
 }

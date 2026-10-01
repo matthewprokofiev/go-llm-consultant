@@ -51,7 +51,14 @@ type Base struct {
 
 	mu       sync.RWMutex
 	sections []Section
+
+	// writeMu — дописывания в файл идут по одному, иначе две записи подряд
+	// могли бы обе создать раздел ответов администратора.
+	writeMu sync.Mutex
 }
+
+// OwnerAnswersTitle — раздел базы, куда попадают одобренные владельцем ответы.
+const OwnerAnswersTitle = "Ответы администратора"
 
 func New(path string, log *slog.Logger) (*Base, error) {
 	b := &Base{path: path, maxChars: MaxPromptChars, log: log}
@@ -61,13 +68,19 @@ func New(path string, log *slog.Logger) (*Base, error) {
 	return b, nil
 }
 
+// FromText строит базу из готового текста — утилита сборки базы проверяет на
+// черновике тот же подбор секций, что будет у бота.
+func FromText(raw string) *Base {
+	return &Base{maxChars: MaxPromptChars, sections: ParseSections(raw)}
+}
+
 // Reload перечитывает файл базы знаний. Вызывается на старте и по команде /reload.
 func (b *Base) Reload() error {
 	raw, err := os.ReadFile(b.path)
 	if err != nil {
 		return fmt.Errorf("чтение базы знаний %s: %w", b.path, err)
 	}
-	sections := parseSections(string(raw))
+	sections := ParseSections(string(raw))
 
 	b.mu.Lock()
 	b.sections = sections
@@ -75,6 +88,65 @@ func (b *Base) Reload() error {
 
 	b.log.Info("база знаний загружена", "path", b.path, "sections", len(sections))
 	return nil
+}
+
+// Append дописывает в базу вопрос и ответ владельца отдельной секцией раздела
+// «Ответы администратора» и сразу перечитывает базу. Вызывается только после
+// явного подтверждения владельцем: ответ, адресованный одному человеку, иначе
+// ушёл бы всем.
+func (b *Base) Append(question, answer string) error {
+	question = strings.Join(strings.Fields(question), " ")
+	answer = sanitizeAnswer(answer)
+	if question == "" || answer == "" {
+		return fmt.Errorf("пустой вопрос или ответ")
+	}
+
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
+
+	raw, err := os.ReadFile(b.path)
+	if err != nil {
+		return fmt.Errorf("чтение базы знаний %s: %w", b.path, err)
+	}
+	var add strings.Builder
+	if !hasSection(string(raw), OwnerAnswersTitle) {
+		add.WriteString("\n\n# " + OwnerAnswersTitle)
+	}
+	add.WriteString("\n\n## " + strings.TrimLeft(question, "#") + "\n" + answer + "\n")
+
+	f, err := os.OpenFile(b.path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("запись в базу знаний %s: %w", b.path, err)
+	}
+	if _, err := f.WriteString(add.String()); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("запись в базу знаний %s: %w", b.path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("запись в базу знаний %s: %w", b.path, err)
+	}
+
+	b.log.Info("база знаний пополнена ответом владельца")
+	return b.Reload()
+}
+
+// sanitizeAnswer убирает «#» в начале строк: строка ответа не должна стать
+// заголовком и разрезать базу на чужие секции.
+func sanitizeAnswer(answer string) string {
+	lines := strings.Split(strings.TrimSpace(answer), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimLeft(strings.TrimRight(l, " \t\r"), "#")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func hasSection(raw, title string) bool {
+	for _, s := range ParseSections(raw) {
+		if s.Title == title && strings.HasPrefix(strings.TrimSpace(s.Text), "# ") {
+			return true
+		}
+	}
+	return false
 }
 
 // Select возвращает текст релевантных вопросу секций, уложенный в лимит по размеру.
@@ -99,11 +171,11 @@ func (b *Base) Select(query string) string {
 	return assemble(fitToLimit(ranked, sections, b.maxChars), sections, b.maxChars)
 }
 
-// parseSections режет markdown на секции по строкам-заголовкам (начинаются с #).
+// ParseSections режет markdown на секции по строкам-заголовкам (начинаются с #).
 // Текст до первого заголовка (или файл без заголовков вовсе) становится одной
 // безымянной секцией — его нельзя терять. Строки внутри fenced-блоков (```)
 // заголовками не считаются: `# комментарий` в примере кода не должен резать секцию.
-func parseSections(raw string) []Section {
+func ParseSections(raw string) []Section {
 	lines := strings.Split(raw, "\n")
 
 	var sections []Section

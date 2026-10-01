@@ -3,6 +3,8 @@ package knowledge
 import (
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -62,7 +64,7 @@ func TestParseSections(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseSections(tt.raw)
+			got := ParseSections(tt.raw)
 			if len(got) != tt.wantCount {
 				t.Fatalf("секций = %d, ожидалось %d: %+v", len(got), tt.wantCount, got)
 			}
@@ -150,5 +152,49 @@ func TestSelectEmptyBase(t *testing.T) {
 	b := testBase(nil)
 	if got := b.Select("что угодно"); got != "" {
 		t.Errorf("пустая база должна возвращать пусто, вернула %q", got)
+	}
+}
+
+func TestAppendOwnerAnswer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "faq.md")
+	if err := os.WriteFile(path, []byte("# Оплата\nКартой и наличными."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b, err := New(path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.Append("Есть\nпарковка?", "Да, бесплатная во дворе.\n# не заголовок"); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := b.Append("Можно с собакой?", "Можно, предупредите заранее."); err != nil {
+		t.Fatalf("второй Append: %v", err)
+	}
+
+	raw, _ := os.ReadFile(path)
+	want := "# Оплата\nКартой и наличными.\n\n# " + OwnerAnswersTitle +
+		"\n\n## Есть парковка?\nДа, бесплатная во дворе.\n не заголовок\n" +
+		"\n\n## Можно с собакой?\nМожно, предупредите заранее.\n"
+	if string(raw) != want {
+		t.Errorf("файл базы:\n%q\nожидался:\n%q", raw, want)
+	}
+	// База перечитана сразу: новый ответ находится без /reload.
+	if got := b.Select("парковка"); !strings.Contains(got, "бесплатная во дворе") {
+		t.Errorf("новая секция не подобрана: %q", got)
+	}
+}
+
+func TestAppendRejectsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "faq.md")
+	if err := os.WriteFile(path, []byte("# Оплата\nКартой."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b, err := New(path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Append("Вопрос?", "  # "); err == nil {
+		t.Error("пустой после очистки ответ записывать нельзя")
 	}
 }

@@ -17,7 +17,6 @@ func newTestYandex(url string) *YandexGPT {
 		apiKey:     "test-api-key",
 		modelURI:   "gpt://folder/yandexgpt-lite/latest",
 		url:        url,
-		log:        testLogger(),
 	}
 }
 
@@ -28,27 +27,27 @@ func TestYandexAsk(t *testing.T) {
 		}
 		body, _ := io.ReadAll(r.Body)
 		// Проверяем, что используем поле text, а не content, и modelUri собран.
-		if !strings.Contains(string(body), `"text"`) {
+		if !strings.Contains(string(body), `"text":"вопрос"`) {
 			t.Errorf("тело без поля text: %s", body)
 		}
 		if !strings.Contains(string(body), `gpt://folder/yandexgpt-lite/latest`) {
 			t.Errorf("тело без modelUri: %s", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"result":{"alternatives":[{"message":{"role":"assistant","text":"  ответ Яндекса  "}}],"usage":{"totalTokens":"15"}}}`)
+		_, _ = io.WriteString(w, `{"result":{"alternatives":[{"message":{"role":"assistant","text":"  ответ Яндекса  "}}],"usage":{"inputTextTokens":"12","completionTokens":"3","totalTokens":"15"}}}`)
 	}))
 	defer srv.Close()
 
 	y := newTestYandex(srv.URL)
-	got, err := y.Ask(context.Background(), "system", "вопрос")
+	got, err := y.Ask(context.Background(), msgs("system", "вопрос"))
 	if err != nil {
 		t.Fatalf("Ask вернул ошибку: %v", err)
 	}
 	if got.Text != "ответ Яндекса" {
 		t.Errorf("ответ = %q, ожидался обрезанный %q", got.Text, "ответ Яндекса")
 	}
-	if got.TokensUsed != 15 {
-		t.Errorf("TokensUsed = %d, ожидалось 15 из строкового usage.totalTokens", got.TokensUsed)
+	if got.InputTokens != 12 || got.OutputTokens != 3 {
+		t.Errorf("токены = %d/%d, ожидалось 12/3 из строковых счётчиков usage", got.InputTokens, got.OutputTokens)
 	}
 }
 
@@ -60,12 +59,10 @@ func TestYandexErrorStatus(t *testing.T) {
 	defer srv.Close()
 
 	y := newTestYandex(srv.URL)
-	_, err := y.Ask(context.Background(), "s", "u")
-	if err == nil {
-		t.Fatal("ожидалась ошибка при статусе 400")
-	}
-	if !strings.Contains(err.Error(), "400") {
-		t.Errorf("ошибка %q не упоминает статус 400", err.Error())
+	_, err := y.Ask(context.Background(), msgs("s", "u"))
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusBadRequest {
+		t.Fatalf("ошибка = %v, ожидался StatusError с кодом 400", err)
 	}
 }
 
@@ -85,7 +82,7 @@ func TestYandexTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := y.Ask(ctx, "s", "u")
+	_, err := y.Ask(ctx, msgs("s", "u"))
 	if err == nil {
 		t.Fatal("ожидалась ошибка по таймауту")
 	}
